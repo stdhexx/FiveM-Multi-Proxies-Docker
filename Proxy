@@ -1,0 +1,146 @@
+#!/bin/bash
+
+# GitHub: github.com/stdhexx
+# FiveM Reverse Proxy Docker Builder Script
+# Usage: ./proxy <FiveM_Server_IP> <FiveM_Server_Port> <Proxy_Port>
+
+set -e
+
+# Check if all arguments are provided
+if [ "$#" -ne 3 ]; then
+    echo "Usage: $0 <FiveM_Server_IP> <FiveM_Server_Port> <Proxy_Port>"
+    echo "Example: $0 1.2.3.4 30120 30155"
+    exit 1
+fi
+
+FIVEM_SERVER_IP=$1
+FIVEM_SERVER_PORT=$2
+PROXY_PORT=$3
+CONTAINER_NAME="fivem_proxy_${PROXY_PORT}"
+IMAGE_NAME="fivem_proxy:latest"
+
+echo "=========================================="
+echo "FiveM Reverse Proxy Docker Builder"
+echo "=========================================="
+echo "FiveM Server IP:   $FIVEM_SERVER_IP"
+echo "FiveM Server Port: $FIVEM_SERVER_PORT"
+echo "Proxy Port:        $PROXY_PORT"
+echo "GitHub: github.com/stdhexx"
+echo "=========================================="
+echo ""
+
+# Check if Docker is installed
+if ! command -v docker &> /dev/null; then
+    echo "Error: Docker is not installed. Please install Docker first."
+    exit 1
+fi
+
+# Check if container already exists and remove it
+if [ "$(docker ps -aq -f name=${CONTAINER_NAME})" ]; then
+    echo "Stopping and removing existing container: ${CONTAINER_NAME}"
+    docker stop ${CONTAINER_NAME} 2>/dev/null || true
+    docker rm ${CONTAINER_NAME} 2>/dev/null || true
+fi
+
+# Create temporary directory for build files
+BUILD_DIR=$(mktemp -d)
+trap "rm -rf ${BUILD_DIR}" EXIT
+
+echo "Creating Docker configuration files..."
+
+# Create Dockerfile
+cat > ${BUILD_DIR}/Dockerfile <<EOF
+FROM nginx:alpine
+
+# Install socat for UDP forwarding
+RUN apk add --no-cache socat
+
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Create startup script
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
+# Expose proxy port for both TCP and UDP
+EXPOSE ${PROXY_PORT}/tcp ${PROXY_PORT}/udp
+
+CMD ["/start.sh"]
+EOF
+
+# Create nginx configuration for TCP/HTTP traffic
+cat > ${BUILD_DIR}/nginx.conf <<EOF
+events {
+    worker_connections 1024;
+}
+
+http {
+    upstream fivem_backend {
+        server ${FIVEM_SERVER_IP}:${FIVEM_SERVER_PORT};
+    }
+
+    server {
+        listen ${PROXY_PORT};
+        
+        location / {
+            proxy_pass http://fivem_backend;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            
+            # WebSocket support for FiveM
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection "upgrade";
+            
+            # Timeouts
+            proxy_connect_timeout 60s;
+            proxy_send_timeout 60s;
+            proxy_read_timeout 60s;
+        }
+    }
+}
+EOF
+
+# Create startup script that runs both nginx and socat for UDP
+cat > ${BUILD_DIR}/start.sh <<EOF
+#!/bin/sh
+set -e
+
+# Start socat for UDP forwarding in background
+socat UDP4-LISTEN:${PROXY_PORT},fork UDP4:${FIVEM_SERVER_IP}:${FIVEM_SERVER_PORT} &
+
+# Start nginx in foreground
+exec nginx -g 'daemon off;'
+EOF
+
+chmod +x ${BUILD_DIR}/start.sh
+
+echo "Building Docker image: ${IMAGE_NAME}..."
+docker build -t ${IMAGE_NAME} ${BUILD_DIR}
+
+echo ""
+echo "Starting Docker container: ${CONTAINER_NAME}..."
+docker run -d \
+    --name ${CONTAINER_NAME} \
+    --restart unless-stopped \
+    -p ${PROXY_PORT}:${PROXY_PORT}/tcp \
+    -p ${PROXY_PORT}:${PROXY_PORT}/udp \
+    ${IMAGE_NAME}
+
+echo ""
+echo "=========================================="
+echo "✓ FiveM Reverse Proxy is now running!"
+echo "=========================================="
+echo "Container Name: ${CONTAINER_NAME}"
+echo "Proxy Endpoint: 0.0.0.0:${PROXY_PORT}"
+echo "Forwarding to:  ${FIVEM_SERVER_IP}:${FIVEM_SERVER_PORT}"
+echo ""
+echo "To view logs:   docker logs -f ${CONTAINER_NAME}"
+echo "To stop:        docker stop ${CONTAINER_NAME}"
+echo "To remove:      docker rm -f ${CONTAINER_NAME}"
+echo "=========================================="
+echo "GitHub: github.com/stdhexx"
+echo "=========================================="
+

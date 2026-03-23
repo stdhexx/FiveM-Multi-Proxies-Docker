@@ -100,7 +100,7 @@ cd fivem-reverse-proxy
 Make the script executable:
 
 ``` bash
-chmod 777 proxy
+chmod 777 Proxy
 ```
 
 ------------------------------------------------------------------------
@@ -109,12 +109,12 @@ chmod 777 proxy
 
 The script syntax is very simple:
 
-    ./proxy <FiveM_Server_IP> <FiveM_Server_Port> <Proxy_Port>
+    ./Proxy <FiveM_Server_IP> <FiveM_Server_Port> <Proxy_Port>
 
 Example:
 
 ``` bash
-./proxy 1.2.3.4 30120 30155
+./Proxy 1.2.3.4 30120 30155
 ```
 
 This will create a proxy like this:
